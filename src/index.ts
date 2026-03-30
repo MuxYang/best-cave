@@ -103,6 +103,7 @@ export interface CaveObject {
   id: number;
   elements: StoredElement[];
   channelId: string;
+  submitterUserId?: string;
   userId: string;
   userName: string;
   status: 'active' | 'delete' | 'pending' | 'preload';
@@ -121,6 +122,7 @@ export interface Config {
   perChannel: boolean;
   adminChannel: string;
   enableName: boolean;
+  bindQuotedSenderOnAdd: boolean;
   enableIO: boolean;
   enablePend: boolean;
   caveFormat: string;
@@ -151,6 +153,7 @@ export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     perChannel: Schema.boolean().default(false).description("启用分群模式"),
     enableName: Schema.boolean().default(false).description("启用自定义昵称"),
+    bindQuotedSenderOnAdd: Schema.boolean().default(false).description("投稿时绑定被引用消息发送者"),
     enableIO: Schema.boolean().default(false).description("启用导入导出"),
     adminChannel: Schema.string().default('onebot:').description("管理群组 ID"),
     caveFormat: Schema.string().default('回声洞 ——（{id}）|—— {name}').description('自定义文本（参见 README）'),
@@ -214,6 +217,7 @@ export function apply(ctx: Context, config: Config) {
     id: 'unsigned',
     elements: 'json',
     channelId: 'string',
+    submitterUserId: 'string',
     userId: 'string',
     userName: 'string',
     status: 'string',
@@ -230,6 +234,24 @@ export function apply(ctx: Context, config: Config) {
   const hashManager = config.enableSimilarity ? new HashManager(ctx, config, logger, fileManager) : null;
   const dataManager = config.enableIO ? new DataManager(ctx, config, fileManager, logger) : null;
   const aiManager = config.enableAI ? new AIManager(ctx, config, logger, fileManager) : null;
+
+  const resolveQuotedSender = (session: any): { userId: string; userName?: string } | null => {
+    if (!config.bindQuotedSenderOnAdd || !session.quote) return null;
+    const quote: any = session.quote;
+    const quoteChannelId = quote?.channelId ?? quote?.event?.channel?.id;
+    if (quoteChannelId != null && session.channelId != null && String(quoteChannelId) !== String(session.channelId)) return null;
+    const quotedUserId = quote?.user?.id ?? quote?.userId;
+    const quotedUserName = quote?.user?.name
+      ?? quote?.user?.nickname
+      ?? quote?.username;
+    const normalizedUserId = quotedUserId != null ? String(quotedUserId).trim() : '';
+    if (!normalizedUserId || normalizedUserId.length > 128) return null;
+    if (/[\u0000-\u001f\u007f\s]/.test(normalizedUserId)) return null;
+    const normalizedUserName = quotedUserName != null
+      ? String(quotedUserName).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 64)
+      : '';
+    return normalizedUserName ? { userId: normalizedUserId, userName: normalizedUserName } : { userId: normalizedUserId };
+  };
 
   const cleanupInterval = ctx.setInterval(async () => {
     const cavesToDelete = await ctx.database.get('cave', { status: 'delete' });
@@ -290,8 +312,22 @@ export function apply(ctx: Context, config: Config) {
       const { finalElementsForDb, mediaToSave } = await utils.processMessageElements(sourceElements, newId, session, creationTime);
       // logger.info(`数据库元素: \n${JSON.stringify(finalElementsForDb, null, 2)}`); // 请勿删除此行
       if (finalElementsForDb.length === 0) return "无可添加内容";
-      const userName = (config.enableName && profileManager ? await profileManager.getNickname(session.userId) : null) || session.username;
-      const newCave: CaveObject = { id: newId, elements: finalElementsForDb, channelId: session.channelId, userId: session.userId, userName, status: 'preload', time: creationTime };
+      const submitterUserId = session.userId;
+      const quotedSender = resolveQuotedSender(session);
+      const contributorUserId = quotedSender?.userId || submitterUserId;
+      const userName = (config.enableName && profileManager ? await profileManager.getNickname(contributorUserId) : null)
+        || quotedSender?.userName
+        || (contributorUserId === submitterUserId ? session.username : contributorUserId);
+      const newCave: CaveObject = {
+        id: newId,
+        elements: finalElementsForDb,
+        channelId: session.channelId,
+        submitterUserId,
+        userId: contributorUserId,
+        userName,
+        status: 'preload',
+        time: creationTime,
+      };
       await ctx.database.create('cave', newCave);
       const needsReviewImmediately = config.enablePend && session.cid !== config.adminChannel;
       session.send(needsReviewImmediately ? `提交成功，序号为（${newCave.id}）` : `添加成功，序号为（${newCave.id}）`);
@@ -319,7 +355,8 @@ export function apply(ctx: Context, config: Config) {
       try {
         const [targetCave] = await ctx.database.get('cave', { id, status: 'active' });
         if (!targetCave) return `回声洞（${id}）不存在`;
-        const isAuthor = targetCave.userId === session.userId;
+        const ownerUserId = targetCave.submitterUserId || targetCave.userId;
+        const isAuthor = ownerUserId === session.userId;
         const isAdmin = session.cid === config.adminChannel;
         if (!isAuthor && !isAdmin) return '你没有权限删除这条回声洞';
         await ctx.database.upsert('cave', [{ id, status: 'delete' }]);

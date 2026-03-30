@@ -68,6 +68,7 @@
 | :--- | :--- | :--- | :--- |
 | `perChannel` | `boolean` | `false` | 是否启用分群模式。`true` 表示各群的回声洞独立。 |
 | `enableName` | `boolean` | `false` | 是否启用自定义昵称功能 (`cave.name` 指令)。 |
+| `bindQuotedSenderOnAdd` | `boolean` | `false` | 投稿时是否优先绑定被引用消息的发送者。开启后，若使用 `cave -a` 并引用消息，投稿人将尝试使用被引用消息作者（ID/昵称）。 |
 | `enableIO` | `boolean` | `false` | 是否启用数据导入/导出功能 (`cave.export` / `.import` 指令)。 |
 | `adminChannel` | `string` | `'onebot:'` | **管理群组ID**。格式为 `平台名:群号`，如 `onebot:12345678`。管理指令仅在此群组生效。若配置无效，审核将自动通过。 |
 | `caveFormat` | `string` | `'回声洞 ——（{id}）\|—— {name}'` | 回声洞消息的显示格式。`\|`为页眉页脚分隔符。支持强大的占位符语法：• **基本**: `{id}`, `{name}`, `{time}`, `{user}`, `{channel}`• **自动打码**: `{*user}` (在占位符前加 `*`)• **审核可见**: `{name/}` (在 `/` 后留空，表示常规模式下不显示)• **审核替换**: `{user/name}` (常规模式显示 `user`，审核模式显示 `name`)• **组合**: `{*user/user}` (常规模式下打码显示 `user`，审核时完整显示 `user`) |
